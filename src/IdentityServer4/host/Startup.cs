@@ -4,19 +4,24 @@
 
 using Host.Configuration;
 using IdentityModel;
-using IdentityServer4;
+using IdentityServer4.EntityFramework.DbContexts;
+using IdentityServer4.EntityFramework.Mappers;
 using IdentityServer4.Quickstart.UI;
 using idunno.Authentication.Certificate;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.IdentityModel.Tokens;
 using System;
+using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 
 namespace Host
 {
-    public class Startup
+    public partial class Startup
     {
         private readonly IConfiguration _config;
 
@@ -27,6 +32,10 @@ namespace Host
 
         public IServiceProvider ConfigureServices(IServiceCollection services)
         {
+
+            var connectionString = this._config.GetConnectionString("db");
+            var migrationsAssembly = typeof(Startup).GetTypeInfo().Assembly.GetName().Name;
+
             services.AddMvc()
                 .SetCompatibilityVersion(Microsoft.AspNetCore.Mvc.CompatibilityVersion.Version_2_1);
 
@@ -35,6 +44,12 @@ namespace Host
                 iis.AuthenticationDisplayName = "Windows";
                 iis.AutomaticAuthentication = false;
             });
+
+            services.AddDbContext<ApplicationDbContext>(builder =>
+                builder.UseSqlServer(connectionString, sqlOptions => sqlOptions.MigrationsAssembly(migrationsAssembly)));
+
+            services.AddIdentity<IdentityUser, IdentityRole>()
+                .AddEntityFrameworkStores<ApplicationDbContext>();
 
             services.AddIdentityServer(options =>
                 {
@@ -46,7 +61,20 @@ namespace Host
                     options.MutualTls.Enabled = true;
                     options.MutualTls.ClientCertificateAuthenticationScheme = "x509";
                 })
-                .AddInMemoryClients(Clients.Get())
+
+                .AddOperationalStore(options =>
+                    options.ConfigureDbContext = builder =>
+                        builder.UseSqlServer(connectionString, sqlOptions => sqlOptions.MigrationsAssembly(migrationsAssembly)))
+                .AddConfigurationStore(options =>
+                    options.ConfigureDbContext = builder =>
+                        builder.UseSqlServer(connectionString, sqlOptions => sqlOptions.MigrationsAssembly(migrationsAssembly)))
+                .AddAspNetIdentity<IdentityUser>()
+                //.AddInMemoryClients(Clients.Get())
+                //.AddInMemoryIdentityResources(Resources.GetIdentityResources())
+                //.AddInMemoryApiResources(Resources.GetApiResources())
+                //.AddTestUsers(Users.Get())
+
+                //.AddInMemoryClients(Clients.Get())
                 //.AddInMemoryClients(_config.GetSection("Clients"))
                 .AddInMemoryIdentityResources(Resources.GetIdentityResources())
                 .AddInMemoryApiResources(Resources.GetApiResources())
@@ -65,12 +93,12 @@ namespace Host
                .AddCertificate("x509", options =>
                {
                    options.RevocationMode = System.Security.Cryptography.X509Certificates.X509RevocationMode.NoCheck;
-                   
+
                    options.Events = new CertificateAuthenticationEvents
                    {
                        OnValidateCertificate = context =>
                        {
-                           context.Principal = Principal.CreateFromCertificate(context.ClientCertificate, includeAllClaims:true);
+                           context.Principal = Principal.CreateFromCertificate(context.ClientCertificate, includeAllClaims: true);
                            context.Success();
 
                            return Task.CompletedTask;
@@ -82,107 +110,90 @@ namespace Host
             return services.BuildServiceProvider(validateScopes: true);
         }
 
-        public void Configure(IApplicationBuilder app)
+        public void Configure(IApplicationBuilder app, IHostingEnvironment env)
         {
+
+            if (env.IsDevelopment())
+            {
+                app.UseDeveloperExceptionPage();
+            }
+
             app.UseMiddleware<Logging.RequestLoggerMiddleware>();
             app.UseDeveloperExceptionPage();
+
+            // InitializeDbTestData(app);
 
             app.UseIdentityServer();
 
             app.UseStaticFiles();
             app.UseMvcWithDefaultRoute();
         }
+
+
+        //private static void InitializeDbTestData(IApplicationBuilder app)
+        //{
+        //    using (var scope = app.ApplicationServices.GetService<IServiceScopeFactory>().CreateScope())
+        //    {
+        //        scope.ServiceProvider.GetRequiredService<PersistedGrantDbContext>().Database.Migrate();
+        //        scope.ServiceProvider.GetRequiredService<ConfigurationDbContext>().Database.Migrate();
+        //        scope.ServiceProvider.GetRequiredService<ApplicationDbContext>().Database.Migrate();
+
+        //        var context = scope.ServiceProvider.GetRequiredService<ConfigurationDbContext>();
+
+        //        if (!context.Clients.Any())
+        //        {
+        //            foreach (IdentityServer4.Models.Client client in Clients.Get())
+        //                context.Clients.Add(client.ToEntity());
+        //            context.SaveChanges();
+        //        }
+
+        //        if (!context.IdentityResources.Any())
+        //        {
+        //            foreach (var resource in Resources.GetIdentityResources())
+        //                context.IdentityResources.Add(resource.ToEntity());
+        //            context.SaveChanges();
+        //        }
+
+        //        if (!context.ApiResources.Any())
+        //        {
+        //            foreach (var resource in Resources.GetApiResources())
+        //                context.ApiResources.Add(resource.ToEntity());
+        //            context.SaveChanges();
+        //        }
+
+        //        var userManager = scope.ServiceProvider.GetRequiredService<UserManager<IdentityUser>>();
+        //        if (!userManager.Users.Any())
+        //            foreach (var testUser in TestUsers.Users)
+        //            {
+        //                var identityUser = new IdentityUser(testUser.Username)
+        //                {
+        //                    Id = Guid.NewGuid().ToString(), // testUser.SubjectId,
+        //                    SecurityStamp = Guid.NewGuid().ToString(),
+        //                    LockoutEnabled = false,
+        //                };
+
+        //                userManager.CreateAsync(identityUser)
+        //                    .Wait();
+
+        //                userManager.AddClaimsAsync(identityUser, testUser.Claims.ToList())
+        //                    .Wait();
+
+        //                userManager.AddPasswordAsync(identityUser, testUser.Password)
+        //                    .Wait();
+
+        //               userManager.UpdateAsync(identityUser);
+
+        //            }
+
+
+        //        // SqlException : The MERGE statement conflicted with the 
+        //        // FOREIGN KEY constraint "FK_AspNetUserClaims_AspNetUsers_UserId". 
+        //        // The conflict occurred in database "IdSrv4", table "dbo.AspNetUsers", column 'Id'.
+
+
+        //    }
+        //}
+
     }
 
-    public static class ServiceExtensions
-    {
-        public static IServiceCollection AddExternalIdentityProviders(this IServiceCollection services)
-        {
-            // configures the OpenIdConnect handlers to persist the state parameter into the server-side IDistributedCache.
-            services.AddOidcStateDataFormatterCache("aad", "demoidsrv");
-
-            services.AddAuthentication()
-                .AddOpenIdConnect("Google","Google", options =>
-                {
-                    options.SignInScheme = IdentityServerConstants.ExternalCookieAuthenticationScheme;
-                    options.ForwardSignOut = IdentityServerConstants.DefaultCookieAuthenticationScheme;
-
-                    options.Authority = "https://accounts.google.com/";
-                    options.ClientId = "708996912208-9m4dkjb5hscn7cjrn5u0r4tbgkbj1fko.apps.googleusercontent.com";
-
-                    options.CallbackPath = "/signin-google";
-                    options.Scope.Add("email");
-                })
-                .AddOpenIdConnect("demoidsrv", "IdentityServer", options =>
-                {
-                    options.SignInScheme = IdentityServerConstants.ExternalCookieAuthenticationScheme;
-                    options.SignOutScheme = IdentityServerConstants.SignoutScheme;
-
-                    options.Authority = "https://demo.identityserver.io/";
-                    options.ClientId = "implicit";
-                    options.ResponseType = "id_token";
-                    options.SaveTokens = true;
-                    options.CallbackPath = "/signin-idsrv";
-                    options.SignedOutCallbackPath = "/signout-callback-idsrv";
-                    options.RemoteSignOutPath = "/signout-idsrv";
-
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        NameClaimType = "name",
-                        RoleClaimType = "role"
-                    };
-                })
-                .AddOpenIdConnect("aad", "Azure AD", options =>
-                {
-                    options.SignInScheme = IdentityServerConstants.ExternalCookieAuthenticationScheme;
-                    options.SignOutScheme = IdentityServerConstants.SignoutScheme;
-
-                    options.Authority = "https://login.windows.net/4ca9cb4c-5e5f-4be9-b700-c532992a3705";
-                    options.ClientId = "96e3c53e-01cb-4244-b658-a42164cb67a9";
-                    options.ResponseType = "id_token";
-                    options.CallbackPath = "/signin-aad";
-                    options.SignedOutCallbackPath = "/signout-callback-aad";
-                    options.RemoteSignOutPath = "/signout-aad";
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        NameClaimType = "name",
-                        RoleClaimType = "role"
-                    };
-                })
-                .AddOpenIdConnect("adfs", "ADFS", options =>
-                {
-                    options.SignInScheme = IdentityServerConstants.ExternalCookieAuthenticationScheme;
-                    options.SignOutScheme = IdentityServerConstants.SignoutScheme;
-
-                    options.Authority = "https://adfs.leastprivilege.vm/adfs";
-                    options.ClientId = "c0ea8d99-f1e7-43b0-a100-7dee3f2e5c3c";
-                    options.ResponseType = "id_token";
-
-                    options.CallbackPath = "/signin-adfs";
-                    options.SignedOutCallbackPath = "/signout-callback-adfs";
-                    options.RemoteSignOutPath = "/signout-adfs";
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        NameClaimType = "name",
-                        RoleClaimType = "role"
-                    };
-                })
-                .AddWsFederation("adfs-wsfed", "ADFS with WS-Fed", options =>
-                {
-                    options.SignInScheme = IdentityServerConstants.ExternalCookieAuthenticationScheme;
-                    options.SignOutScheme = IdentityServerConstants.SignoutScheme;
-
-                    options.MetadataAddress = "https://adfs4.local/federationmetadata/2007-06/federationmetadata.xml";
-                    options.Wtrealm = "urn:test";
-
-                    options.TokenValidationParameters = new TokenValidationParameters
-                    {
-                        NameClaimType = "name",
-                        RoleClaimType = "role"
-                    };
-                });
-
-            return services;
-        }
-    }
 }
